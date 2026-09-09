@@ -10,6 +10,7 @@ import {
   getChildAnalytics,
   getChildAcademicInsights,
   getChildProgressReport,
+  resetChildPassword,
 } from "../../api/parentDashboard";
 import ParentProgressStory from "./ParentProgressStory";
 import ParentNotificationGroups from "./ParentNotificationGroups";
@@ -25,6 +26,100 @@ function downloadProgressReportPdf(report){
 // ── Design tokens ─────────────────────────────────────────────────────────────
 var btn1={padding:"7px 14px",borderRadius:8,border:"none",background:"#6366f1",color:"#fff",fontFamily:"inherit",fontSize:".8rem",fontWeight:700,cursor:"pointer"};
 var card={background:"var(--panel,#fff)",border:"1px solid var(--border,#e5e7eb)",borderRadius:12,padding:"14px 16px",marginBottom:12};
+var inp={padding:"8px 12px",borderRadius:8,border:"1px solid var(--border,#e5e7eb)",fontFamily:"inherit",fontSize:".85rem",background:"var(--surface2,#f8fafc)",color:"var(--text,#1e293b)",width:"100%"};
+
+// ── Nested modal accessibility: Escape-to-close + focus trap + initial focus ─
+function useModalA11y(onClose){
+  var panelRef=useRef(null);
+  useEffect(function(){
+    var el=panelRef.current;
+    if(el){
+      var focusable=el.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if(focusable.length) focusable[0].focus();
+    }
+    function onKeyDown(e){
+      if(e.key==="Escape"){e.stopPropagation();onClose();return;}
+      if(e.key==="Tab"&&panelRef.current){
+        var focusable=panelRef.current.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        if(!focusable.length) return;
+        var first=focusable[0], last=focusable[focusable.length-1];
+        if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+        else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+      }
+    }
+    document.addEventListener("keydown",onKeyDown);
+    return function(){document.removeEventListener("keydown",onKeyDown);};
+  },[onClose]);
+  return panelRef;
+}
+
+// ── Reset Child Password modal ────────────────────────────────────────────────
+// Bypasses email entirely — most children have no real, reachable email of
+// their own, so the login page's "Forgot Password" flow can't reach them,
+// and forwarding a reset link to the parent's inbox would only ever reset
+// the PARENT's own account (Supabase scopes the recovery token to whichever
+// account owns the destination address). This mirrors how the parent already
+// sets the child's password directly in the Add Child form.
+function ResetChildPasswordModal({child, onClose}){
+  var [password,setPassword]=useState("");
+  var [confirmPassword,setConfirmPassword]=useState("");
+  var [loading,setLoading]=useState(false);
+  var [error,setError]=useState("");
+  var [done,setDone]=useState(false);
+  var panelRef=useModalA11y(onClose);
+
+  async function submit(e){
+    e.preventDefault();
+    setError("");
+    if(password.length<8){setError("Password must be at least 8 characters.");return;}
+    if(password!==confirmPassword){setError("Passwords do not match.");return;}
+    setLoading(true);
+    var d=await resetChildPassword(child.id,password).catch(function(e2){return{success:false,error:e2.message};});
+    setLoading(false);
+    if(d&&d.success!==false) setDone(true);
+    else setError((d&&d.error)||"Could not reset password.");
+  }
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:700,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label={"Reset password for "+(child?.name||"child")}
+        style={{background:"var(--panel,#fff)",border:"1px solid var(--border,#e5e7eb)",borderRadius:14,padding:"16px 18px",width:"100%",maxWidth:380,boxShadow:"0 8px 32px rgba(0,0,0,.2)"}}>
+        {done?(
+          <>
+            <div style={{fontWeight:800,fontSize:"1rem",color:"#166534",marginBottom:6}}>Password updated</div>
+            <div style={{fontSize:".78rem",color:"#64748b",marginBottom:14}}>
+              Share the new password with {child?.name||"your child"} directly. It will not be shown again.
+            </div>
+            <div style={{background:"rgba(99,102,241,.06)",border:"1px solid rgba(167,139,250,.3)",borderRadius:8,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <code style={{fontWeight:700,fontSize:".9rem",color:"#1e293b"}}>{password}</code>
+              <button onClick={function(){navigator.clipboard&&navigator.clipboard.writeText(password).catch(function(){});}}
+                style={{border:"1px solid rgba(167,139,250,.3)",background:"none",borderRadius:5,padding:"2px 8px",fontSize:".7rem",cursor:"pointer",color:"#6366f1",fontFamily:"inherit"}}>Copy</button>
+            </div>
+            <button onClick={onClose} style={{...btn1,width:"100%"}}>Done</button>
+          </>
+        ):(
+          <>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}>
+              <h4 style={{margin:0}}>🔑 Reset {child?.name||"Child"}'s Password</h4>
+              <button onClick={onClose} aria-label="Close" style={{background:"none",border:"none",cursor:"pointer",fontSize:"1.1rem"}}>✕</button>
+            </div>
+            <div style={{fontSize:".76rem",color:"#64748b",marginBottom:10}}>
+              {child?.name||"Your child"} signs in without their own email, so a password reset link can't reach them. Set a new password here and share it directly instead.
+            </div>
+            <form onSubmit={submit} style={{display:"flex",flexDirection:"column",gap:8}}>
+              <label><span style={{fontSize:".78rem",fontWeight:600}}>New password *</span>
+                <input type="text" value={password} onChange={function(e){setPassword(e.target.value);}} required autoFocus placeholder="At least 8 characters" style={{...inp,marginTop:2}}/></label>
+              <label><span style={{fontSize:".78rem",fontWeight:600}}>Confirm password *</span>
+                <input type="text" value={confirmPassword} onChange={function(e){setConfirmPassword(e.target.value);}} required style={{...inp,marginTop:2}}/></label>
+              {error&&<div style={{fontSize:".82rem",color:"#dc2626"}}>{error}</div>}
+              <button type="submit" disabled={loading} style={btn1}>{loading?"Updating…":"Update Password"}</button>
+            </form>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ── Fetch error banner — distinct from an empty/no-data state ────────────────
 function FetchErrorBanner({message, onRetry}){
@@ -366,6 +461,7 @@ export default function ParentChildWorkspace({child, onClose, onUpgrade}){
   var [analyticsError,setAnalyticsError] = useState(null);
   var [insightsError,setInsightsError]   = useState(null);
   var [reportError,setReportError]       = useState(null);
+  var [showResetPw,setShowResetPw]       = useState(false);
 
   var closeBtnRef = useRef(null);
   var panelRef     = useRef(null);
@@ -472,7 +568,13 @@ export default function ParentChildWorkspace({child, onClose, onUpgrade}){
               {plan.plan_name&&<span style={{marginLeft:6,fontSize:".7rem",fontWeight:600,color:plan.has_full_access?"#22c55e":"#ef4444"}}>{plan.has_full_access?"✓ "+plan.plan_name:"⊘ "+plan.plan_name}</span>}
             </div>
           </div>
-          <button ref={closeBtnRef} onClick={onClose} aria-label="Close learning workspace" style={{background:"none",border:"none",fontSize:"1.2rem",cursor:"pointer",padding:4}}>✕</button>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <button data-testid="ws-reset-password-btn" onClick={function(){setShowResetPw(true);}}
+              style={{padding:"5px 10px",borderRadius:6,border:"1px solid var(--border,#e5e7eb)",background:"var(--panel,#fff)",fontSize:".73rem",cursor:"pointer",fontFamily:"inherit",fontWeight:600,color:"#6366f1",whiteSpace:"nowrap"}}>
+              🔑 Reset Password
+            </button>
+            <button ref={closeBtnRef} onClick={onClose} aria-label="Close learning workspace" style={{background:"none",border:"none",fontSize:"1.2rem",cursor:"pointer",padding:4}}>✕</button>
+          </div>
         </div>
         {/* Tab bar — horizontal scroll with touch support */}
         <div role="tablist" aria-label="Child workspace sections" style={{display:"flex",gap:0,overflowX:"scroll",overflowY:"hidden",
@@ -510,6 +612,8 @@ export default function ParentChildWorkspace({child, onClose, onUpgrade}){
         {tab==="notifs"    &&<ParentNotificationGroups notifications={allNotifs}/>}
         {tab==="report"    &&<ReportSection report={report} loading={loadingReport}/>}
       </div>
+
+      {showResetPw&&<ResetChildPasswordModal child={child} onClose={function(){setShowResetPw(false);}}/>}
     </div>
   );
 }

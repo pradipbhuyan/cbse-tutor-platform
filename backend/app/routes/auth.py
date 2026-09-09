@@ -285,11 +285,18 @@ def login(data: LoginRequest, _rl=Depends(rate_limit_dependency(LOGIN_LIMITER)))
 @router.post("/forgot-password")
 def forgot_password(payload: dict, _rl=Depends(rate_limit_dependency(PASSWORD_RESET_LIMITER))):
     """
-    Send a password reset email for a student.
+    Send a password reset email to a user's own registered email address.
 
-    If the student has a parent_id, the reset link is also sent to the
-    parent's email so they can help the child reset without needing to
-    access the child's inbox.
+    IMPORTANT: this never CCs a student's reset link to the parent's email.
+    Supabase's reset_password_for_email() always scopes the recovery token to
+    whichever Auth account owns the destination address — so a link "sent to
+    the parent to help the child reset" would actually let the parent reset
+    their OWN password, not the child's, the moment they click it. A child
+    with no real registered email (the common case — see
+    _resolve_child_auth_email in parent_dashboard.py) has no reachable inbox
+    for this endpoint to use at all; the parent should reset that child's
+    password directly instead, via POST /api/parent/children/{id}/reset-password
+    (parent dashboard → child → Reset Password).
 
     Payload: { "username": "likha1" }
     Silently succeeds even if the username is not found (security best practice).
@@ -313,53 +320,27 @@ def forgot_password(payload: dict, _rl=Depends(rate_limit_dependency(PASSWORD_RE
         return {"success": True, "message": "If this account exists, a reset link was sent."}
 
     profile = profile_result.data[0]
-    emails_to_notify = []
 
-    # Always send to the user's own email
+    # Only ever reset via the account's own registered email — never a
+    # relative's. A synthetic child.likhapoha.in address (assigned when a
+    # parent skips the child's email) is intentionally unreachable, so this
+    # is a safe no-op for those accounts; the parent must use the
+    # parent-dashboard reset-password endpoint instead.
+    sent = False
     if profile.get("email"):
-        emails_to_notify.append(profile["email"])
-
-    # For students, also send to the parent's email
-    if profile.get("parent_id"):
-        parent_result = (
-            admin_client
-            .table("profiles")
-            .select("email")
-            .eq("id", profile["parent_id"])
-            .limit(1)
-            .execute()
-        )
-        if parent_result.data and parent_result.data[0].get("email"):
-            parent_email = parent_result.data[0]["email"]
-            if parent_email not in emails_to_notify:
-                emails_to_notify.append(parent_email)
-
-    # Send reset emails (non-fatal — never block on email failure)
-    sent_to = []
-    for email in emails_to_notify:
         try:
             anon_client.auth.reset_password_for_email(
-                email,
+                profile["email"],
                 options={"redirect_to": f"{settings.FRONTEND_URL or 'https://likhapoha.in'}/reset-password"},
             )
-            sent_to.append(email)
+            sent = True
         except Exception:
             pass
-
-    # Also try Supabase admin link for the student's own email
-    try:
-        admin_client.auth.admin.generate_link({
-            "type": "recovery",
-            "email": profile["email"],
-            "options": {"redirect_to": f"{settings.FRONTEND_URL or 'https://likhapoha.in'}/reset-password"},
-        })
-    except Exception:
-        pass
 
     return {
         "success": True,
         "message": "If this account exists, a reset link was sent.",
-        "sent_to_count": len(sent_to),
+        "sent_to_count": 1 if sent else 0,
     }
 
 

@@ -67,6 +67,14 @@ export async function getChildDetail(childId) {
   return authFetch(`/api/parent/children/${childId}/detail`, { method: "GET" });
 }
 
+export async function resetChildPassword(childId, password) {
+  /** Parent sets a new login password directly for their child — bypasses email reset entirely. */
+  return authFetch(`/api/parent/children/${childId}/reset-password`, {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Parent Experience Phase 2 — /api/parent/*
 // ─────────────────────────────────────────────────────────────────────────────

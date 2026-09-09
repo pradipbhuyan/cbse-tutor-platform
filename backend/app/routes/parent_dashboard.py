@@ -1027,6 +1027,57 @@ def get_child_detail(child_id: str, parent=Depends(require_parent)):
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/parent/children/{child_id}/reset-password
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ResetChildPasswordRequest(BaseModel):
+    password: str
+
+
+@router_parent.post("/children/{child_id}/reset-password")
+def reset_child_password(child_id: str, data: ResetChildPasswordRequest, parent=Depends(require_parent)):
+    """
+    Let a parent set a new login password for their child directly.
+
+    Most children have no real, reachable email (see _resolve_child_auth_email
+    above), so Supabase's email-based recovery can never reach them — and
+    forwarding the reset link to the parent's own email doesn't work either,
+    since reset_password_for_email() always scopes the recovery token to
+    whichever Auth account owns that address (the parent's own), not the
+    child's. The parent already sets the child's password directly at
+    creation time (create_student), so this follows the same trust model
+    instead of routing through email.
+    """
+    parent_profile = parent["profile"]
+    child = _verify_child_ownership(parent_profile, child_id)
+    if not child:
+        raise HTTPException(status_code=403, detail="Child not found or not linked to this parent.")
+
+    new_password = data.password
+    if not new_password or len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+
+    try:
+        admin_client.auth.admin.update_user_by_id(child_id, {"password": new_password})
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)[:150]) from exc
+
+    write_audit_event(
+        event_type="parent.child_password_reset",
+        actor_user_id=parent_profile["id"],
+        target_user_id=child_id,
+        entity_type="student",
+        entity_id=child_id,
+        metadata={"triggered_by": "parent_dashboard"},
+    )
+
+    return {
+        "success": True,
+        "username": child.get("username"),
+    }
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # router_parent continued  @ /api/parent  (formerly parent_dashboard_p2.py "Phase 2")
 # ═════════════════════════════════════════════════════════════════════════════

@@ -239,9 +239,11 @@ useEffect(() => {
 
   async function handleForgotPassword() {
     /**
-     * Send a password reset email.
-     * For students: also sends to the parent's email so parents can help their
-     * child reset without the child needing access to their own inbox.
+     * Send a password reset email to the account's own registered address.
+     * Child accounts usually have no real email of their own (see
+     * _resolve_child_auth_email on the backend) — for those, a parent must
+     * reset the password directly from the Parent Dashboard instead, since
+     * there's no inbox this link could ever reach.
      */
     setError("");
     setInfoMessage("");
@@ -254,14 +256,13 @@ useEffect(() => {
     setLoading(true);
 
     try {
-      // Use the backend endpoint which handles parent-email forwarding for children
       await fetch(`${API_BASE_URL}/api/auth/forgot-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: username.trim() }),
       });
       setInfoMessage(
-        "If this account exists, a reset link has been sent. For student accounts, the link is also sent to the parent's email."
+        "If this account exists, a reset link has been sent to its registered email. Child accounts without their own email can't receive one — a parent can reset the password from the Parent Dashboard instead."
       );
     } catch {
       setInfoMessage(
